@@ -1,0 +1,10 @@
+{
+  "name": "users-api-function",
+  "version": "1.0.0",
+  "description": "Multi-tenant users API",
+  "main": "users.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.490.0",
+    "@aws-sdk/lib-dynamodb": "^3.490.0"
+  }
+}

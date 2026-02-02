@@ -1,0 +1,9 @@
+{
+  "name": "authorizer-function",
+  "version": "1.0.0",
+  "description": "JWT authorizer with tenant context injection",
+  "main": "index.js",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  }
+}

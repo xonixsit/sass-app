@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Multi-tenant SaaS application infrastructure
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref SaaSTable
+
+Resources:
+  # DynamoDB Table with tenant isolation
+  SaaSTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-saas-table"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # Lambda Authorizer
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../functions/authorizer/
+      Handler: index.handler
+      Description: JWT authorizer with tenant context injection
+
+  # Users API Function
+  UsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../functions/api/
+      Handler: users.handler
+      Description: Multi-tenant users API
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SaaSTable
+      Events:
+        GetUsers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SaaSApi
+            Path: /users
+            Method: get
+            Auth:
+              Authorizer: SaaSAuthorizer
+        CreateUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SaaSApi
+            Path: /users
+            Method: post
+            Auth:
+              Authorizer: SaaSAuthorizer
+        GetUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref SaaSApi
+            Path: /users/{userId}
+            Method: get
+            Auth:
+              Authorizer: SaaSAuthorizer
+
+  # API Gateway
+  SaaSApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: v1
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Auth:
+        Authorizers:
+          SaaSAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            Identity:
+              Header: Authorization
+              ValidationExpression: "^Bearer [-0-9A-Za-z\\.]+$"
+              ReauthorizeEvery: 300
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${SaaSApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+  
+  TableName:
+    Description: "DynamoDB table name"
+    Value: !Ref SaaSTable
+    Export:
+      Name: !Sub "${AWS::StackName}-TableName"
