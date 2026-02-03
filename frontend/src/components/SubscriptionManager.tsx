@@ -1,12 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 
+// Utility function to safely format dates
+const formatDate = (dateString: string | null | undefined): string => {
+  if (!dateString) return 'N/A';
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Invalid Date';
+    return date.toLocaleDateString();
+  } catch (error) {
+    return 'Invalid Date';
+  }
+};
+
 interface Plan {
   id: string;
   name: string;
-  price: number;
+  monthly_price: number;
+  yearly_price: number;
   currency: string;
-  billing_cycle: string;
   features: {
     max_users: number;
     max_projects: number;
@@ -29,6 +41,7 @@ interface Subscription {
   id: string;
   tenant_id: string;
   plan_id: string;
+  billing_cycle: string;
   status: string;
   current_period_start: string;
   current_period_end: string;
@@ -50,13 +63,14 @@ interface UsageStats {
 }
 
 export const SubscriptionManager: React.FC = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [currentSubscription, setCurrentSubscription] = useState<Subscription | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [changingPlan, setChangingPlan] = useState(false);
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
 
   useEffect(() => {
     if (token) {
@@ -106,13 +120,17 @@ export const SubscriptionManager: React.FC = () => {
 
     try {
       setChangingPlan(true);
+      
       const response = await fetch('/api/v1/subscription/change', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ plan_id: planId })
+        body: JSON.stringify({ 
+          plan_id: planId,
+          billing_cycle: billingCycle
+        })
       });
 
       if (!response.ok) {
@@ -130,6 +148,20 @@ export const SubscriptionManager: React.FC = () => {
     } finally {
       setChangingPlan(false);
     }
+  };
+
+  const getPrice = (plan: Plan) => {
+    return billingCycle === 'yearly' ? plan.yearly_price : plan.monthly_price;
+  };
+
+  const getSavings = (plan: Plan) => {
+    if (billingCycle === 'yearly' && plan.monthly_price > 0) {
+      const monthlyTotal = plan.monthly_price * 12;
+      const savings = monthlyTotal - plan.yearly_price;
+      const percentage = Math.round((savings / monthlyTotal) * 100);
+      return { amount: savings, percentage };
+    }
+    return null;
   };
 
   const formatUsage = (current: number, limit: number) => {
@@ -182,7 +214,7 @@ export const SubscriptionManager: React.FC = () => {
                 {currentSubscription.plan.name}
               </h3>
               <p className="text-gray-600">
-                ${currentSubscription.plan.price}/{currentSubscription.plan.billing_cycle}
+                ${currentSubscription.plan.monthly_price || currentSubscription.plan.price || 0}/{currentSubscription.billing_cycle || 'monthly'}
               </p>
               <p className="text-sm text-gray-500">
                 Status: <span className="capitalize font-medium">{currentSubscription.status}</span>
@@ -191,7 +223,7 @@ export const SubscriptionManager: React.FC = () => {
             <div className="text-right">
               <p className="text-sm text-gray-500">Current period ends</p>
               <p className="font-medium">
-                {new Date(currentSubscription.current_period_end).toLocaleDateString()}
+                {formatDate(currentSubscription.current_period_end)}
               </p>
             </div>
           </div>
@@ -226,7 +258,7 @@ export const SubscriptionManager: React.FC = () => {
                   </div>
                   {stats.last_used && (
                     <p className="text-xs text-gray-500">
-                      Last used: {new Date(stats.last_used).toLocaleDateString()}
+                      Last used: {formatDate(stats.last_used)}
                     </p>
                   )}
                 </div>
@@ -238,23 +270,69 @@ export const SubscriptionManager: React.FC = () => {
 
       {/* Available Plans */}
       <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-6">Subscription Plans</h2>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-gray-900">Subscription Plans</h2>
+          
+          {/* Billing Cycle Toggle */}
+          <div className="flex items-center space-x-3">
+            <span className={`text-sm ${billingCycle === 'monthly' ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
+              Monthly
+            </span>
+            <button
+              onClick={() => setBillingCycle(billingCycle === 'monthly' ? 'yearly' : 'monthly')}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                billingCycle === 'yearly' ? 'bg-blue-600' : 'bg-gray-200'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  billingCycle === 'yearly' ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+            <span className={`text-sm ${billingCycle === 'yearly' ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
+              Yearly
+            </span>
+            {billingCycle === 'yearly' && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                Save up to 17%
+              </span>
+            )}
+          </div>
+        </div>
+        
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {plans.map((plan) => {
             const isCurrent = currentSubscription?.plan_id === plan.id;
+            const price = getPrice(plan);
+            const savings = getSavings(plan);
+            
             return (
               <div
                 key={plan.id}
-                className={`border rounded-lg p-6 ${
+                className={`border rounded-lg p-6 relative ${
                   isCurrent ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
                 }`}
               >
+                {savings && (
+                  <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      Save ${savings.amount.toFixed(0)} ({savings.percentage}%)
+                    </span>
+                  </div>
+                )}
+                
                 <div className="text-center mb-4">
                   <h3 className="text-xl font-semibold text-gray-900">{plan.name}</h3>
                   <div className="mt-2">
-                    <span className="text-3xl font-bold text-gray-900">${plan.price}</span>
-                    <span className="text-gray-600">/{plan.billing_cycle}</span>
+                    <span className="text-3xl font-bold text-gray-900">${price}</span>
+                    <span className="text-gray-600">/{billingCycle}</span>
                   </div>
+                  {billingCycle === 'yearly' && plan.monthly_price > 0 && (
+                    <p className="text-sm text-gray-500 mt-1">
+                      ${plan.monthly_price}/month billed annually
+                    </p>
+                  )}
                 </div>
 
                 <ul className="space-y-2 mb-6">
@@ -303,7 +381,7 @@ export const SubscriptionManager: React.FC = () => {
                       : 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500'
                   }`}
                 >
-                  {changingPlan ? 'Changing...' : isCurrent ? 'Current Plan' : 'Select Plan'}
+                  {changingPlan ? 'Changing...' : isCurrent ? 'Current Plan' : `Select ${billingCycle === 'yearly' ? 'Yearly' : 'Monthly'}`}
                 </button>
               </div>
             );

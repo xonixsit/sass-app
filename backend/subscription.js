@@ -6,9 +6,9 @@ const SUBSCRIPTION_PLANS = {
   free: {
     id: 'free',
     name: 'Free Plan',
-    price: 0,
+    monthly_price: 0,
+    yearly_price: 0,
     currency: 'USD',
-    billing_cycle: 'monthly',
     features: {
       max_users: 3,
       max_projects: 1,
@@ -35,9 +35,9 @@ const SUBSCRIPTION_PLANS = {
   basic: {
     id: 'basic',
     name: 'Basic Plan',
-    price: 9.99,
+    monthly_price: 9.99,
+    yearly_price: 99.99, // 2 months free
     currency: 'USD',
-    billing_cycle: 'monthly',
     features: {
       max_users: 10,
       max_projects: 5,
@@ -45,7 +45,7 @@ const SUBSCRIPTION_PLANS = {
       api_calls_per_month: 10000,
       support: 'email',
       custom_branding: false,
-      advanced_analytics: true,
+      advanced_analytics: false,
       integrations: ['basic', 'webhooks'],
       export_formats: ['csv', 'json'],
       team_collaboration: true,
@@ -64,9 +64,9 @@ const SUBSCRIPTION_PLANS = {
   premium: {
     id: 'premium',
     name: 'Premium Plan',
-    price: 29.99,
+    monthly_price: 29.99,
+    yearly_price: 299.99, // 2 months free
     currency: 'USD',
-    billing_cycle: 'monthly',
     features: {
       max_users: 50,
       max_projects: 25,
@@ -93,9 +93,9 @@ const SUBSCRIPTION_PLANS = {
   enterprise: {
     id: 'enterprise',
     name: 'Enterprise Plan',
-    price: 99.99,
+    monthly_price: 99.99,
+    yearly_price: 999.99, // 2 months free
     currency: 'USD',
-    billing_cycle: 'monthly',
     features: {
       max_users: -1, // unlimited
       max_projects: -1, // unlimited
@@ -144,6 +144,7 @@ const initSubscriptionTables = async () => {
         id VARCHAR(50) PRIMARY KEY,
         tenant_id VARCHAR(50) NOT NULL,
         plan_id VARCHAR(50) NOT NULL,
+        billing_cycle ENUM('monthly', 'yearly') DEFAULT 'monthly',
         status ENUM('active', 'canceled', 'past_due', 'trialing', 'paused') DEFAULT 'active',
         current_period_start DATETIME NOT NULL,
         current_period_end DATETIME NOT NULL,
@@ -165,6 +166,14 @@ const initSubscriptionTables = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
     `).catch(() => {
       // Ignore if constraint already exists
+    });
+
+    // Add billing_cycle column if it doesn't exist
+    await connection.execute(`
+      ALTER TABLE subscriptions 
+      ADD COLUMN billing_cycle ENUM('monthly', 'yearly') DEFAULT 'monthly'
+    `).catch(() => {
+      // Ignore if column already exists
     });
 
     // Create usage tracking table
@@ -215,6 +224,44 @@ const initSubscriptionTables = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
     `).catch(() => {
       // Ignore if constraint already exists
+    });
+
+    // Create enterprise settings table
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS enterprise_settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        tenant_id VARCHAR(50) NOT NULL,
+        company_logo_url TEXT,
+        primary_color VARCHAR(7) DEFAULT '#6366f1',
+        secondary_color VARCHAR(7) DEFAULT '#8b5cf6',
+        accent_color VARCHAR(7) DEFAULT '#06b6d4',
+        custom_domain VARCHAR(255),
+        application_name VARCHAR(255),
+        white_label_enabled BOOLEAN DEFAULT FALSE,
+        custom_css TEXT,
+        favicon_url VARCHAR(500),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_tenant_settings (tenant_id),
+        INDEX idx_tenant_id (tenant_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // Add foreign key constraint for enterprise_settings
+    await connection.execute(`
+      ALTER TABLE enterprise_settings 
+      ADD CONSTRAINT fk_enterprise_settings_tenant 
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+    `).catch(() => {
+      // Ignore if constraint already exists
+    });
+
+    // Update company_logo_url column to support larger base64 images
+    await connection.execute(`
+      ALTER TABLE enterprise_settings 
+      MODIFY COLUMN company_logo_url TEXT
+    `).catch(() => {
+      // Ignore if column modification fails
     });
 
     connection.release();
@@ -347,7 +394,7 @@ const subscriptionManager = {
   },
 
   // Upgrade/downgrade subscription
-  changeSubscription: async (tenantId, newPlanId, userId = null) => {
+  changeSubscription: async (tenantId, newPlanId, billingCycle = 'monthly', userId = null) => {
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -360,7 +407,14 @@ const subscriptionManager = {
       // Create new subscription record
       const subscriptionId = `sub_${tenantId}_${Date.now()}`;
       const now = new Date();
-      const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      
+      // Calculate period end based on billing cycle
+      const periodEnd = new Date(now.getTime());
+      if (billingCycle === 'yearly') {
+        periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+      } else {
+        periodEnd.setMonth(periodEnd.getMonth() + 1);
+      }
       
       // Cancel old subscription
       await connection.execute(`
@@ -370,9 +424,9 @@ const subscriptionManager = {
       
       // Create new subscription
       await connection.execute(`
-        INSERT INTO subscriptions (id, tenant_id, plan_id, current_period_start, current_period_end)
-        VALUES (?, ?, ?, ?, ?)
-      `, [subscriptionId, tenantId, newPlanId, now, periodEnd]);
+        INSERT INTO subscriptions (id, tenant_id, plan_id, billing_cycle, current_period_start, current_period_end)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [subscriptionId, tenantId, newPlanId, billingCycle, now, periodEnd]);
       
       await connection.commit();
       
@@ -446,11 +500,112 @@ const checkUsageLimit = (resourceType) => {
   };
 };
 
+// Enterprise settings management
+const enterpriseSettingsManager = {
+  // Get enterprise settings for tenant
+  getSettings: async (tenantId) => {
+    const [rows] = await pool.execute(`
+      SELECT * FROM enterprise_settings WHERE tenant_id = ?
+    `, [tenantId]);
+    
+    if (rows.length === 0) {
+      // Return default settings if none exist
+      return {
+        tenant_id: tenantId,
+        company_logo_url: null,
+        primary_color: '#6366f1',
+        secondary_color: '#8b5cf6',
+        accent_color: '#06b6d4',
+        custom_domain: null,
+        application_name: null,
+        white_label_enabled: false,
+        custom_css: null,
+        favicon_url: null
+      };
+    }
+    
+    return rows[0];
+  },
+
+  // Update enterprise settings
+  updateSettings: async (tenantId, settings) => {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      console.log('Updating enterprise settings for tenant:', tenantId);
+      console.log('Settings to update:', Object.keys(settings));
+      
+      // Check if settings exist
+      const [existing] = await connection.execute(`
+        SELECT id FROM enterprise_settings WHERE tenant_id = ?
+      `, [tenantId]);
+      
+      if (existing.length === 0) {
+        console.log('Creating new enterprise settings record');
+        // Insert new settings
+        await connection.execute(`
+          INSERT INTO enterprise_settings (
+            tenant_id, company_logo_url, primary_color, secondary_color, 
+            accent_color, custom_domain, application_name, white_label_enabled,
+            custom_css, favicon_url
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          tenantId,
+          settings.company_logo_url || null,
+          settings.primary_color || '#6366f1',
+          settings.secondary_color || '#8b5cf6',
+          settings.accent_color || '#06b6d4',
+          settings.custom_domain || null,
+          settings.application_name || null,
+          settings.white_label_enabled || false,
+          settings.custom_css || null,
+          settings.favicon_url || null
+        ]);
+      } else {
+        console.log('Updating existing enterprise settings record');
+        // Update existing settings
+        const updateFields = [];
+        const updateValues = [];
+        
+        Object.keys(settings).forEach(key => {
+          if (settings[key] !== undefined) {
+            updateFields.push(`${key} = ?`);
+            updateValues.push(settings[key]);
+            console.log(`Will update ${key} with value length:`, settings[key] ? settings[key].length : 'null');
+          }
+        });
+        
+        if (updateFields.length > 0) {
+          updateValues.push(tenantId);
+          const query = `UPDATE enterprise_settings SET ${updateFields.join(', ')} WHERE tenant_id = ?`;
+          console.log('Executing update query:', query);
+          await connection.execute(query, updateValues);
+        }
+      }
+      
+      await connection.commit();
+      
+      // Return updated settings
+      const result = await enterpriseSettingsManager.getSettings(tenantId);
+      console.log('Final settings retrieved:', result.company_logo_url ? 'Logo URL present' : 'Logo URL missing');
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      console.error('Error updating enterprise settings:', error);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+};
+
 module.exports = {
   SUBSCRIPTION_PLANS,
   initSubscriptionTables,
   createDefaultSubscriptions,
   subscriptionManager,
+  enterpriseSettingsManager,
   requireFeature,
   checkUsageLimit
 };

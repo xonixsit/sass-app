@@ -1,7 +1,9 @@
-import React, { createContext, useState } from 'react';
+import React, { createContext, useState, useEffect } from 'react';
 import { UserList } from './components/UserList';
 import { SubscriptionManager } from './components/SubscriptionManager';
 import { Analytics } from './components/Analytics';
+import { Teams } from './components/Teams';
+import { EnterpriseFeatures } from './components/EnterpriseFeatures';
 import { useAuthProvider } from './hooks/useAuth';
 
 // Create Auth Context
@@ -144,6 +146,43 @@ const LoginForm: React.FC<{ onLogin: (email: string, password: string, tenantId:
 function App() {
   const auth = useAuthProvider();
   const [activeTab, setActiveTab] = useState('users');
+  const [currentSubscription, setCurrentSubscription] = useState<any>(null);
+
+  // Fetch current subscription to determine available features
+  useEffect(() => {
+    const fetchSubscription = async () => {
+      if (auth.token) {
+        try {
+          const response = await fetch('/api/v1/subscription', {
+            headers: { 'Authorization': `Bearer ${auth.token}` }
+          });
+          if (response.ok) {
+            const subscription = await response.json();
+            setCurrentSubscription(subscription);
+          }
+        } catch (error) {
+          console.error('Failed to fetch subscription:', error);
+        }
+      }
+    };
+
+    fetchSubscription();
+
+    // Listen for navigation events from Analytics component
+    const handleNavigateToSubscription = () => {
+      setActiveTab('subscription');
+    };
+
+    window.addEventListener('navigateToSubscription', handleNavigateToSubscription);
+    
+    return () => {
+      window.removeEventListener('navigateToSubscription', handleNavigateToSubscription);
+    };
+  }, [auth.token]);
+
+  const hasAnalytics = currentSubscription?.plan?.features?.advanced_analytics || false;
+  const hasTeamCollaboration = currentSubscription?.plan?.features?.team_collaboration || false;
+  const isEnterprise = currentSubscription?.plan?.id === 'enterprise';
 
   if (auth.isLoading) {
     return (
@@ -161,6 +200,10 @@ function App() {
         return <SubscriptionManager />;
       case 'analytics':
         return <Analytics />;
+      case 'teams':
+        return <Teams />;
+      case 'enterprise':
+        return <EnterpriseFeatures />;
       default:
         return <UserList />;
     }
@@ -223,6 +266,25 @@ function App() {
                     Subscription
                   </button>
                   <button
+                    onClick={() => setActiveTab('teams')}
+                    className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                      activeTab === 'teams'
+                        ? 'border-blue-500 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    }`}
+                  >
+                    Teams
+                    {hasTeamCollaboration ? (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                        Available
+                      </span>
+                    ) : (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                        Basic+
+                      </span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => setActiveTab('analytics')}
                     className={`py-4 px-1 border-b-2 font-medium text-sm ${
                       activeTab === 'analytics'
@@ -231,9 +293,34 @@ function App() {
                     }`}
                   >
                     Analytics
-                    <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
-                      Premium
-                    </span>
+                    {hasAnalytics ? (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                        Available
+                      </span>
+                    ) : (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                        Premium+
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('enterprise')}
+                    className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                      activeTab === 'enterprise'
+                        ? 'border-blue-500 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    }`}
+                  >
+                    Enterprise
+                    {isEnterprise ? (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                        Available
+                      </span>
+                    ) : (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                        Enterprise
+                      </span>
+                    )}
                   </button>
                 </div>
               </div>

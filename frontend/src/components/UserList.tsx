@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { formatDate } from '../utils/dateUtils';
 
 interface User {
   id: string;
@@ -183,7 +184,7 @@ export const UserList: React.FC = () => {
                     {user.role}
                   </span>
                   <span className="text-xs text-gray-400">
-                    {new Date(user.createdAt).toLocaleDateString()}
+                    {formatDate(user.created_at)}
                   </span>
                 </div>
               </div>

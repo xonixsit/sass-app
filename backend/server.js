@@ -10,6 +10,7 @@ const {
   initSubscriptionTables, 
   createDefaultSubscriptions,
   subscriptionManager, 
+  enterpriseSettingsManager,
   requireFeature, 
   checkUsageLimit 
 } = require('./subscription');
@@ -32,6 +33,8 @@ const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
+  console.log('Auth header:', authHeader?.substring(0, 50) + '...');
+
   if (!token) {
     return res.status(401).json({ 
       error: { 
@@ -48,6 +51,7 @@ const authenticateToken = async (req, res, next) => {
       decoded = jwt.decode(token);
     } catch (e) {
       // Standard JWT decode failed
+      console.log('Standard JWT decode failed:', e.message);
     }
     
     if (!decoded) {
@@ -56,6 +60,7 @@ const authenticateToken = async (req, res, next) => {
       if (parts.length === 3) {
         try {
           const payloadString = Buffer.from(parts[1], 'base64').toString();
+          console.log('Decoded payload string:', payloadString);
           decoded = JSON.parse(payloadString);
         } catch (decodeError) {
           console.log('Manual decode failed:', decodeError.message);
@@ -64,6 +69,7 @@ const authenticateToken = async (req, res, next) => {
     }
     
     if (!decoded || !decoded.tenantId) {
+      console.log('Invalid token or missing tenant:', decoded);
       return res.status(403).json({ 
         error: { 
           code: 'INVALID_TOKEN', 
@@ -75,6 +81,7 @@ const authenticateToken = async (req, res, next) => {
     // Verify tenant exists
     const tenant = await tenantDb.getById(decoded.tenantId);
     if (!tenant || tenant.status !== 'active') {
+      console.log('Tenant not found or inactive:', decoded.tenantId);
       return res.status(403).json({ 
         error: { 
           code: 'TENANT_INACTIVE', 
@@ -129,9 +136,9 @@ app.get('/api/v1/plans', async (req, res) => {
     const plans = Object.values(SUBSCRIPTION_PLANS).map(plan => ({
       id: plan.id,
       name: plan.name,
-      price: plan.price,
+      monthly_price: plan.monthly_price,
+      yearly_price: plan.yearly_price,
       currency: plan.currency,
-      billing_cycle: plan.billing_cycle,
       features: plan.features
     }));
     
@@ -195,9 +202,9 @@ app.get('/api/v1/usage', authenticateToken, async (req, res) => {
 });
 
 // Change subscription plan
-app.post('/api/v1/subscription/change', authenticateToken, requireRole(['admin']), async (req, res) => {
+app.post('/api/v1/subscription/change', authenticateToken, async (req, res) => {
   try {
-    const { plan_id } = req.body;
+    const { plan_id, billing_cycle = 'monthly' } = req.body;
     
     if (!plan_id || !SUBSCRIPTION_PLANS[plan_id]) {
       return res.status(400).json({
@@ -207,10 +214,20 @@ app.post('/api/v1/subscription/change', authenticateToken, requireRole(['admin']
         }
       });
     }
+
+    if (!['monthly', 'yearly'].includes(billing_cycle)) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_BILLING_CYCLE',
+          message: 'Billing cycle must be monthly or yearly'
+        }
+      });
+    }
     
     const newSubscription = await subscriptionManager.changeSubscription(
       req.user.tenantId, 
-      plan_id, 
+      plan_id,
+      billing_cycle,
       req.user.userId
     );
     
@@ -313,6 +330,204 @@ app.post('/api/v1/upload', authenticateToken, checkUsageLimit('file_uploads'), a
       error: {
         code: 'UPLOAD_ERROR',
         message: 'Failed to upload file'
+      }
+    });
+  }
+});
+
+// =============================================================================
+// ENTERPRISE SETTINGS ENDPOINTS
+// =============================================================================
+
+// Get enterprise settings
+app.get('/api/v1/enterprise/settings', authenticateToken, requireFeature('white_label'), async (req, res) => {
+  try {
+    console.log('Getting enterprise settings for tenant:', req.user.tenantId);
+    const settings = await enterpriseSettingsManager.getSettings(req.user.tenantId);
+    console.log('Retrieved settings:', settings.company_logo_url ? 'Logo URL present' : 'Logo URL missing');
+    
+    // Validate logo URL - clear if invalid, too large, or corrupted
+    if (settings.company_logo_url && 
+        (!settings.company_logo_url.startsWith('data:image/') || 
+         settings.company_logo_url.length > 2 * 1024 * 1024 ||
+         settings.company_logo_url.length === 65535)) {
+      console.log('Invalid, oversized, or corrupted logo URL detected, clearing it. Length:', settings.company_logo_url.length);
+      // Clear the invalid logo URL
+      await enterpriseSettingsManager.updateSettings(req.user.tenantId, { company_logo_url: null });
+      settings.company_logo_url = null;
+    }
+    
+    res.json(settings);
+  } catch (error) {
+    console.error('Error fetching enterprise settings:', error);
+    res.status(500).json({
+      error: {
+        code: 'FETCH_ERROR',
+        message: 'Failed to fetch enterprise settings'
+      }
+    });
+  }
+});
+
+// Update enterprise settings
+app.put('/api/v1/enterprise/settings', authenticateToken, requireFeature('white_label'), async (req, res) => {
+  try {
+    const settings = req.body;
+    
+    // Validate settings
+    const allowedFields = [
+      'company_logo_url', 'primary_color', 'secondary_color', 'accent_color',
+      'custom_domain', 'application_name', 'white_label_enabled', 'custom_css', 'favicon_url'
+    ];
+    
+    const filteredSettings = {};
+    Object.keys(settings).forEach(key => {
+      if (allowedFields.includes(key)) {
+        filteredSettings[key] = settings[key];
+      }
+    });
+    
+    const updatedSettings = await enterpriseSettingsManager.updateSettings(
+      req.user.tenantId, 
+      filteredSettings
+    );
+    
+    res.json({
+      message: 'Enterprise settings updated successfully',
+      settings: updatedSettings
+    });
+  } catch (error) {
+    console.error('Error updating enterprise settings:', error);
+    res.status(500).json({
+      error: {
+        code: 'UPDATE_ERROR',
+        message: 'Failed to update enterprise settings'
+      }
+    });
+  }
+});
+
+// Upload company logo
+app.post('/api/v1/enterprise/upload-logo', authenticateToken, requireFeature('white_label'), async (req, res) => {
+  try {
+    // In a real implementation, you would handle file upload here
+    // For demo purposes, we'll store the base64 data directly
+    const { logoData } = req.body;
+    
+    console.log('Logo upload request received for tenant:', req.user.tenantId);
+    console.log('Logo data length:', logoData ? logoData.length : 'undefined');
+    console.log('Logo data starts with:', logoData ? logoData.substring(0, 50) : 'undefined');
+    
+    if (!logoData) {
+      return res.status(400).json({
+        error: {
+          code: 'MISSING_DATA',
+          message: 'Logo data is required'
+        }
+      });
+    }
+    
+    // Validate that logoData is a proper data URL
+    if (!logoData.startsWith('data:image/')) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FORMAT',
+          message: 'Logo must be a valid base64 data URL starting with data:image/'
+        }
+      });
+    }
+
+    // Check file size (limit to 2MB for base64 data URLs)
+    if (logoData.length > 2 * 1024 * 1024) {
+      return res.status(400).json({
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: 'Logo file is too large. Please use an image smaller than 2MB.'
+        }
+      });
+    }
+
+    // Validate base64 format more thoroughly
+    const base64Match = logoData.match(/^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/);
+    if (!base64Match) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FORMAT',
+          message: 'Invalid image format. Please use PNG, JPEG, or GIF.'
+        }
+      });
+    }
+    
+    // For demo, we'll store the base64 data URL directly
+    // In production, you would upload to cloud storage and return the URL
+    const logoUrl = logoData; // Use the base64 data URL directly
+    
+    console.log('Updating enterprise settings with logo URL length:', logoUrl.length);
+    
+    // Update enterprise settings with new logo URL
+    const updatedSettings = await enterpriseSettingsManager.updateSettings(
+      req.user.tenantId,
+      { company_logo_url: logoUrl }
+    );
+    
+    console.log('Settings updated successfully:', updatedSettings.company_logo_url ? 'Logo URL saved' : 'Logo URL not saved');
+    
+    res.json({
+      message: 'Logo uploaded successfully',
+      logo_url: logoUrl,
+      settings: updatedSettings
+    });
+  } catch (error) {
+    console.error('Error uploading logo:', error);
+    res.status(500).json({
+      error: {
+        code: 'UPLOAD_ERROR',
+        message: 'Failed to upload logo'
+      }
+    });
+  }
+});
+
+// Clean up invalid logo URLs (admin endpoint)
+app.post('/api/v1/enterprise/cleanup-logos', authenticateToken, requireFeature('white_label'), async (req, res) => {
+  try {
+    console.log('Cleaning up invalid logo URLs for tenant:', req.user.tenantId);
+    
+    // Get current settings
+    const settings = await enterpriseSettingsManager.getSettings(req.user.tenantId);
+    
+    // Check if logo URL is invalid
+    if (settings.company_logo_url && 
+        !settings.company_logo_url.startsWith('data:image/') && 
+        !settings.company_logo_url.startsWith('/') &&
+        !settings.company_logo_url.startsWith('http://localhost') &&
+        !settings.company_logo_url.startsWith('https://localhost')) {
+      
+      console.log('Removing invalid logo URL:', settings.company_logo_url);
+      
+      // Clear the invalid logo URL
+      const updatedSettings = await enterpriseSettingsManager.updateSettings(
+        req.user.tenantId, 
+        { company_logo_url: null }
+      );
+      
+      res.json({
+        message: 'Invalid logo URL cleaned up successfully',
+        removed_url: settings.company_logo_url,
+        settings: updatedSettings
+      });
+    } else {
+      res.json({
+        message: 'No invalid logo URLs found',
+        settings: settings
+      });
+    }
+  } catch (error) {
+    console.error('Error cleaning up logo URLs:', error);
+    res.status(500).json({
+      error: {
+        code: 'CLEANUP_ERROR',
+        message: 'Failed to cleanup logo URLs'
       }
     });
   }

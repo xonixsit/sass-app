@@ -67,17 +67,62 @@ export const Analytics: React.FC = () => {
 
   if (accessDenied) {
     return (
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-        <div className="mb-4">
-          <svg className="mx-auto h-12 w-12 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+      <div className="bg-gradient-to-br from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-8 text-center">
+        <div className="mb-6">
+          <svg className="mx-auto h-16 w-16 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
         </div>
-        <h3 className="text-lg font-medium text-yellow-800 mb-2">Premium Feature</h3>
-        <p className="text-yellow-700 mb-4">{error}</p>
-        <p className="text-sm text-yellow-600">
-          Upgrade to Premium or Enterprise plan to access advanced analytics.
+        <h3 className="text-2xl font-bold text-gray-900 mb-4">Advanced Analytics</h3>
+        <p className="text-lg text-gray-700 mb-6">
+          Get detailed insights into your business performance with advanced analytics and reporting.
         </p>
+        
+        <div className="bg-white rounded-lg p-6 mb-6 shadow-sm">
+          <h4 className="font-semibold text-gray-900 mb-3">What you'll get:</h4>
+          <ul className="text-left space-y-2 text-gray-600">
+            <li className="flex items-center">
+              <svg className="h-5 w-5 text-green-500 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              Revenue tracking and growth metrics
+            </li>
+            <li className="flex items-center">
+              <svg className="h-5 w-5 text-green-500 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              User growth and engagement analytics
+            </li>
+            <li className="flex items-center">
+              <svg className="h-5 w-5 text-green-500 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              Feature usage statistics
+            </li>
+            <li className="flex items-center">
+              <svg className="h-5 w-5 text-green-500 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              Export data in multiple formats
+            </li>
+          </ul>
+        </div>
+
+        <div className="space-y-3">
+          <button 
+            onClick={() => {
+              // Navigate to subscription tab
+              const event = new CustomEvent('navigateToSubscription');
+              window.dispatchEvent(event);
+            }}
+            className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-blue-700 transition-all duration-200 shadow-lg"
+          >
+            Upgrade to Premium - $29.99/month
+          </button>
+          <p className="text-sm text-gray-500">
+            Available in Premium and Enterprise plans
+          </p>
+        </div>
       </div>
     );
   }
